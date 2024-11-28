@@ -3,11 +3,13 @@
 ## **Introduction**
 This report aims to reflect on the design of the database implemented for a hotel management system. It discusses the decisions made during the design process, evaluates the suitability of the resulting structure, and examines how the solution is optimized under different conditions, such as handling large volumes of data, transaction speed, and complex query requirements.
 
-## Requirements
+### Requirements
 - Downloads MariaDB Server Rolling : [Link](https://mariadb.org/download/?t=mariadb&p=mariadb&r=11.6.2&os=windows&cpu=x86_64&pkg=msi&mirror=one)
 
 
 ## **Part 1: Database Design and Implementation**
+
+
 ### **1. Schema model**
 The Schema model shows the creation of the tables in the database:
 - **Guests**: The information about guests.
@@ -15,9 +17,6 @@ The Schema model shows the creation of the tables in the database:
 
 
 ```sql
-CREATE DATABASE HotelManagement;
-USE HotelManagement;
-
 CREATE TABLE Guests (
 GuestID INT PRIMARY KEY,
 FullName VARCHAR(100),
@@ -49,7 +48,7 @@ ADD CONSTRAINT fk_room
 FOREIGN KEY (RoomNumber) REFERENCES Rooms(RoomNumber);
 ```
 
-#### Now we need to fill the database with mock data
+**Now we need to fill the database with mock data**
 ```sql
 -- Data for the Guests table
 INSERT INTO Guests (GuestID, FullName, Email) VALUES
@@ -96,35 +95,37 @@ INSERT INTO Reservations (ReservationID, GuestID, CheckInDate, CheckOutDate, Roo
 The ER diagram shows the relationships between the tables in the database:
 
 ```mermaid
----
-title: ER Diagram
----
-classDiagram
-    class Guests{
-        GuestID : INT [PK]
-        FullName : VARCHAR(100)
-        Email : VARCHAR(100)
-    }
-    class Rooms{
-        RoomNumber : INT [PK]
-        RoomType : VARCHAR(50)
-        PricePerNight : DECIMAL(10, 2)
-    }
-    class Reservations{
-        ReservationID : INT [PK]
-        GuestID : INT [FK]
-        RoomNumber : INT [FK]
-        CheckInDate : DATE
-        CheckOutDate : DATE
+erDiagram   
+    Guests ||--o{ Reservations : "makes"
+    Rooms ||--o{ Reservations : "has"
+   
+    Rooms {
+        int RoomNumber PK
+        varchar RoomType
+        decimal AdditionalPrice
     }
 
-    Reservations --> Guests : "GuestID"
-    Reservations --> Rooms : "RoomNumber"
+    Guests {
+        int GuestID PK
+        varchar FullName
+        varchar Email UNIQUE
+        varchar PhoneNumber UNIQUE
+        text Address
+    }
+
+    Reservations {
+        int ReservationID PK
+        int GuestID FK
+        int RoomNumber FK
+        date CheckInDate
+        date CheckOutDate
+    }    
+
 ```
 ### **4. SQL Scripts and Usability**
-### (OBS) In the **migrations.sql** file you can find the complete script to create the database and fill it with fake data to be able to use it.
+**(OBS) In the `migrations.sql` file you can find the complete script to create the database and fill it with fake data to be able to use it**.
 
-#### Querys to check that the database is working perfectly
+**Querys to check that the database is working perfectly**
 ```sql
 -- Get all querys
 SELECT * FROM Reservations;
@@ -151,16 +152,35 @@ INNER JOIN Guests ON Reservations.GuestID=Guests.GuestID;
 
 
 
-## **Part 2: Database Design**
+## **Part 2: Stored Procedure**
 Develop a stored procedure for your database. It should perform a useful function related to your data model.
-```
+```sql
+DELIMITER //
+    CREATE PROCEDURE spGetGuestsReservations(IN p_GuestEmail INT)
+    BEGIN
+        START TRANSACTION;
+        IF NOT EXISTS (SELECT 1 FROM Guests WHERE Email = p_GuestEmail) THEN
+            ROLLBACK;
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Guest not found.';
+        END IF;
 
+        SELECT G.GuestID, G.FullName, G.Email, G.PhoneNumber, G.Address,
+           R.ReservationID, R.CheckInDate, R.CheckOutDate, R.RoomNumber
+        FROM Guests AS G
+        INNER JOIN Reservations AS R ON R.GuestID = G.GuestID
+        WHERE G.Email = p_GuestEmail;
+    END //
+DELIMITER ;
+```
+**executing the stored procedure**
+```sql
+CALL spGetGuestsReservations("alice@example.com");
 ```
 
 ## **Part 3: Performance analysis**
 In this part we analyze the performance of one of the SQL queries, use a tool like a query planner for analysis and implement an improvement based on the analysis.
 
-### Analyze the performance of one of your SQL queries.
+**Analyze the performance of one of your SQL queries.**
 ```sql
 EXPLAIN SELECT CONCAT("|Name: ", FullName, " ", "| Room: ", RoomNumber, "| Check In: ", CheckInDate, " Check Out: ", CheckOutDate) 
 AS Reservation
@@ -169,16 +189,25 @@ INNER JOIN Guests
 ON Reservations.GuestID=Guests.GuestID;
 ```
 
-### OUTPUT
+**OUTPUT**
 | id | select_type |      table    |  type  |  possible_keys   |   key    |  key_len  |   ref                         |  rows |     Extra    |
 |----|-------------|---------------|--------|------------------|----------|-----------|-------------------------------|-------|--------------|
 |  1 |    SIMPLE   | Reservations  |  ALL   |     GuestID      | `<NULL>` |  `<NULL>` |        `<NULL>`               |   10  | Using where  |
-|  1 |    SIMPLE   |    Guests     | eq_red |     PRIMARY      | PRIMARY  |     4     |  hoteldb.Reservations.GuestID |   1   |              |
+|  1 |    SIMPLE   |    Guests     | eq_red |     PRIMARY      | PRIMARY  |     4     |  your_database.Reservations.GuestID |   1   |              |
 
-### Explain
-- Reservations table is doing an "ALL" scan this indicates that the Reservations table is not using an index to filter or join with the Guests table. This can be inefficient if the table has many rows.
+**Explanation of Each Field Summarized:**
+- **id:** The query's sequence number; 1 indicates the primary query.
+- **select_type:** Type of SELECT; SIMPLE means no subqueries.
+- **table:** The table being accessed.
+- **type:** The join or access method; ALL is a full scan, eq_ref is an exact match using a primary key.
+- **possible_keys:** Indexes that could be used.
+- **key:** The index actually used.
+- **key_len:** The length of the index used.
+- **ref:** The column compared to the index.
+- **rows:** Estimated number of rows examined.
+- **Extra:** Additional execution details.
 
-### Implement an improvement based on your analysis.
+**Implement an improvement based on your analysis.**
 ```sql
 CREATE INDEX idx_GuestID ON Reservations (GuestID);
 CREATE INDEX idx_GuestID ON Guests (GuestID);
@@ -187,32 +216,30 @@ CREATE INDEX idx_RoomNumber ON Rooms (RoomNumber);
 ```
 
 ## **Part 4: Användarhantering och Säkerhet**
-A restricted user was created with specific rights
-
-### Create a new user in the database with limited permissions.
+**Create a new user in the database with limited permissions.**
 ```sql
 CREATE USER 'limited_user'@'localhost' IDENTIFIED BY 'p';
-GRANT SELECT ON HotelDB.Guests TO 'limited_user'@'localhost';
-GRANT SELECT ON HotelDB.Reservations TO 'limited_user'@'localhost';
+GRANT SELECT ON your_database.Guests TO 'limited_user'@'localhost';
+GRANT SELECT ON your_database.Reservations TO 'limited_user'@'localhost';
 ```
-### It is recommended to open a console and try to log in with the new user and try the commands.
+**It is recommended to open a console and try to log in with the new user and try the commands.**
 
-```
+```git
 mysql -u limited_user -p -h localhost
 -- the password is p
 ```
-### This is the error that would occur if the user does not have authorization.
+**This is the error that would occur if the user does not have authorization.**
 ```
-ERROR 1142 (42000): SELECT command denied to user 'limited_user'@'localhost' for table `hoteldb`.`rooms`
+ERROR 1142 (42000): SELECT command denied to user 'limited_user'@'localhost' for table `your_database`.`rooms`
 ```
 
-### Create a backup of your database.
+**Create a backup of your database.**
 ```sql
-BACKUP DATABASE HotelDB TO DISK = 'C:\Users\alexx\Desktop\d-ingupg-d4-Alexx6MR\backup.sql';
+BACKUP DATABASE your_database TO DISK = 'C:\Users\alexx\Desktop\d-ingupg-d4-Alexx6MR\backup.sql';
 ```
-### Simulate a database crash and show how to restore the database from the backup.
+**Simulate a database crash and show how to restore the database from the backup.**
 ```sql
-DROP DATABASE HotelDB;
-CREATE DATABASE HotelDB;
-mysql -u root -p HotelDB < backup.sql
+DROP DATABASE your_database;
+CREATE DATABASE your_database;
+mysql -u root -p your_database < backup.sql
 ```
